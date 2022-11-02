@@ -67,35 +67,11 @@ public:
   static void ThrowIntercept() {
     uint8_t *RSP = (uint8_t *)_AddressOfReturnAddress();
     uint8_t *PC = *(uint8_t **)(RSP + 512 + 16); // Traverse RSP stack back
-    outs() << "Throw intercepted\n";
-    auto It = --PluginInstance->AddrToFuncEntry.upper_bound((uint64_t)PC);
-    auto Func = It->second;
-    uint8_t *Begin = GetBeginAddress(PluginInstance->ImageBase, Func);
-    uint8_t *End = GetEndAddress(PluginInstance->ImageBase, Func);
-    if (PC >= End) {
-      return;
-    }
-    outs() << "Function name: "
-           << PluginInstance->AddrToSymbolName[(uint64_t)Begin] << "\n";
-    PluginInstance->Disassemble(MutableArrayRef<uint8_t>(Begin, End));
   }
 
   void modifyPassConfig(MaterializationResponsibility &MR,
                         jitlink::LinkGraph &G,
                         jitlink::PassConfiguration &Config) override {
-    Config.PrePrunePasses.push_back([&](jitlink::LinkGraph &G) { 
-      jitlink::Symbol *TrampolineSym = nullptr;
-      for (auto *B : G.blocks()) {
-        for (auto &E : B->edges()) {
-          if (E.getTarget().getName() == "_CxxThrowException") {
-            if (!TrampolineSym)
-              TrampolineSym = createTrampoline(G);
-            E.setTarget(*TrampolineSym);
-          }
-        }
-      }
-      return Error::success();
-    });
     Config.PostFixupPasses.push_back([&](jitlink::LinkGraph &G) {
       for (auto *S : G.defined_symbols()) {
         if (S->getScope() != jitlink::Scope::Default)
@@ -123,7 +99,6 @@ public:
             uint8_t *Begin = GetBeginAddress(ImageBase, Func);
             uint8_t *End = GetEndAddress(ImageBase, Func);
             UNWIND_INFO *UnwindInfo = GetUnwindInfo(ImageBase, Func);
-            AddrToFuncEntry[(uint64_t)Begin] = Func;
             PrintLine();
             outs() << "Function name: " << AddrToSymbolName[(uint64_t)Begin]
                    << "\n";
@@ -162,7 +137,6 @@ public:
   bool Log = false;
   uint64_t ImageBase;
   std::map<uint64_t, std::string> AddrToSymbolName;
-  std::map<uint64_t, RUNTIME_FUNCTION> AddrToFuncEntry;
 };
 
 int main(int argc, char *argv[]) {
