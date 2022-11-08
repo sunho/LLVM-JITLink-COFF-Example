@@ -100,7 +100,8 @@ public:
 
     Config.PostFixupPasses.push_back([&](jitlink::LinkGraph &G) {
       for (auto *S : G.defined_symbols()) {
-        AddrToSymbolName[S->getAddress().getValue()] = S->getName();
+        if (S->getScope() == jitlink::Scope::Default)
+          AddrToSymbolName[S->getAddress().getValue()] = S->getName();
       }
       return Error::success();
     });

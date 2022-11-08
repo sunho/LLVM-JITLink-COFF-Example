@@ -1,131 +1,339 @@
-#include <stdio.h>
+#include <GL\glew.h>
 #include <SDL.h>
+#include <SDL_opengl.h>
+#include <fstream>
+#include <gl\glu.h>
+#include <glm/glm.hpp>
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
+#include <stdio.h>
+#include <stdlib.h>
+#include <streambuf>
+#include <string>
 
 using namespace glm;
 
-float noise(vec3 p) //Thx to Las^Mercury
-{
-	vec3 i = floor(p);
-	vec4 a = dot(i, vec3(1., 57., 21.)) + vec4(0., 57., 21., 78.);
-	vec3 f = cos((p-i)*acos(-1.))*(-.5)+.5;
-	a = mix(sin(cos(a)*a),sin(cos(1.+a)*(1.+a)), f.x);
-	a.xy = mix(a.xz, a.yw, f.y);
-	return mix(a.x, a.y, f.z);
-}
+// The window we'll be rendering to
+SDL_Window *gWindow = NULL;
 
-float sphere(vec3 p, vec4 spr)
-{
-	return length(spr.xyz-p) - spr.w;
-}
+// OpenGL context
+SDL_GLContext gContext;
 
-float flame(vec3 p)
-{
-	float d = sphere(p*vec3(1.,.5,1.), vec4(.0,-1.,.0,1.));
-	return d + (noise(p+vec3(.0,iTime*2.,.0)) + noise(p*3.)*.5)*.25*(p.y) ;
-}
+// Render flag
+bool gRenderQuad = true;
 
-float scene(vec3 p)
-{
-	return min(100.-length(p) , abs(flame(p)) );
-}
+// Graphics program
+GLuint gProgramID = 0;
+GLint gVertexPos2DLocation = -1;
+GLuint gVBO = 0;
+GLuint gIBO = 0;
 
-vec4 raymarch(vec3 org, vec3 dir)
-{
-	float d = 0.0, glow = 0.0, eps = 0.02;
-	vec3  p = org;
-	bool glowed = false;
-	
-	for(int i=0; i<64; i++)
-	{
-		d = scene(p) + eps;
-		p += d * dir;
-		if( d>eps )
-		{
-			if(flame(p) < .0)
-				glowed=true;
-			if(glowed)
-       			glow = float(i)/64.;
-		}
-	}
-	return vec4(p,glow);
-}
+const int SCREEN_WIDTH = 1600;
+const int SCREEN_HEIGHT = 1000;
 
-void mainImage( out vec4 fragColor, in vec2 fragCoord )
-{
-	vec2 v = -1.0 + 2.0 * fragCoord.xy / iResolution.xy;
-	v.x *= iResolution.x/iResolution.y;
-	
-	vec3 org = vec3(0., -2., 4.);
-	vec3 dir = normalize(vec3(v.x*1.6, -v.y, -1.5));
-	
-	vec4 p = raymarch(org, dir);
-	float glow = p.w;
-	
-	vec4 col = mix(vec4(1.,.5,.1,1.), vec4(0.1,.5,1.,1.), p.y*.02+.4);
-	
-	fragColor = mix(vec4(0.), col, pow(glow*2.,4.));
-	//fragColor = mix(vec4(1.), mix(vec4(1.,.5,.1,1.),vec4(0.1,.5,1.,1.),p.y*.02+.4), pow(glow*2.,4.));
+void printProgramLog(GLuint program) {
+  // Make sure name is shader
+  if (glIsProgram(program)) {
+    // Program log length
+    int infoLogLength = 0;
+    int maxLength = infoLogLength;
 
-}
+    // Get info string length
+    glGetProgramiv(program, GL_INFO_LOG_LENGTH, &maxLength);
 
+    // Allocate string
+    char *infoLog = new char[maxLength];
 
-
-int main(int argc, char *argv[]) {
-    int a;
-    scanf_s("%d", &a);
-    SDL_Init(SDL_INIT_VIDEO);
-
-    SDL_Window * window = SDL_CreateWindow("",
-        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-        640, 480,
-        SDL_WINDOW_RESIZABLE);
-
-    SDL_Renderer * renderer = SDL_CreateRenderer(window,
-        -1, SDL_RENDERER_PRESENTVSYNC);
-
-    int width = 320;
-    int height = 240;
-
-    // Since we are going to display a low resolution buffer,
-    // it is best to limit the window size so that it cannot
-    // be smaller than our internal buffer size.
-    SDL_SetWindowMinimumSize(window, width, height);
-
-    SDL_RenderSetLogicalSize(renderer, width, height);
-    SDL_RenderSetIntegerScale(renderer, SDL_TRUE);
-
-    SDL_Texture * screen_texture = SDL_CreateTexture(renderer,
-        SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_STREAMING,
-        width, height);
-
-    unsigned int * pixels = (unsigned int * )malloc(width * height * 4);
-
-    while (1)
-    {
-        SDL_Event event;
-        while (SDL_PollEvent(&event))
-        {
-            if (event.type == SDL_QUIT) exit(0);
-        }
-
-        // Set every pixel to white.
-        for (int y = 0; y < height; ++y)
-        {
-            for (int x = 0; x < width; ++x)
-            {
-                pixels[x + y * width] = 0xffffffff;
-            }
-        }
-
-        // It's a good idea to clear the screen every frame,
-        // as artifacts may occur if the window overlaps with
-        // other windows or transparent overlays.
-        SDL_RenderClear(renderer);
-        SDL_UpdateTexture(screen_texture, NULL, pixels, width * 4);
-        SDL_RenderCopy(renderer, screen_texture, NULL, NULL);
-        SDL_RenderPresent(renderer);
+    // Get info log
+    glGetProgramInfoLog(program, maxLength, &infoLogLength, infoLog);
+    if (infoLogLength > 0) {
+      // Print Log
+      printf("%s\n", infoLog);
     }
-    return 0;
+
+    // Deallocate string
+    delete[] infoLog;
+  } else {
+    printf("Name %d is not a program\n", program);
+  }
+}
+
+void printShaderLog(GLuint shader) {
+  // Make sure name is shader
+  if (glIsShader(shader)) {
+    // Shader log length
+    int infoLogLength = 0;
+    int maxLength = infoLogLength;
+
+    // Get info string length
+    glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &maxLength);
+
+    // Allocate string
+    char *infoLog = new char[maxLength];
+
+    // Get info log
+    glGetShaderInfoLog(shader, maxLength, &infoLogLength, infoLog);
+    if (infoLogLength > 0) {
+      // Print Log
+      printf("%s\n", infoLog);
+    }
+
+    // Deallocate string
+    delete[] infoLog;
+  } else {
+    printf("Name %d is not a shader\n", shader);
+  }
+}
+
+bool initGL() {
+  // Success flag
+  bool success = true;
+
+  // Generate program
+  gProgramID = glCreateProgram();
+
+  // Create vertex shader
+  GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
+
+  // Get vertex source
+  const GLchar *vertexShaderSource[] = {
+      "#version 140\nin vec2 LVertexPos2D; void main() { gl_Position = vec4( "
+      "LVertexPos2D.x, LVertexPos2D.y, 0, 1 ); }"};
+
+  // Set vertex source
+  glShaderSource(vertexShader, 1, vertexShaderSource, NULL);
+
+  // Compile vertex source
+  glCompileShader(vertexShader);
+
+  // Check vertex shader for errors
+  GLint vShaderCompiled = GL_FALSE;
+  glGetShaderiv(vertexShader, GL_COMPILE_STATUS, &vShaderCompiled);
+  if (vShaderCompiled != GL_TRUE) {
+    printf("Unable to compile vertex shader %d!\n", vertexShader);
+    printShaderLog(vertexShader);
+    success = false;
+  } else {
+    // Attach vertex shader to program
+    glAttachShader(gProgramID, vertexShader);
+
+    // Create fragment shader
+    GLuint fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
+
+    // Get fragment source
+    auto fp = fopen("main.frag", "r");
+    long size;
+    fseek(fp, 0, SEEK_END);
+    size = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    char *fcontent = (char *)malloc(size);
+    fread(fcontent, 1, size, fp);
+    fclose(fp);
+    // Set fragment source
+
+    glShaderSource(fragmentShader, 1, &fcontent, NULL);
+
+    // Compile fragment source
+    glCompileShader(fragmentShader);
+
+    // Check fragment shader for errors
+    GLint fShaderCompiled = GL_FALSE;
+    glGetShaderiv(fragmentShader, GL_COMPILE_STATUS, &fShaderCompiled);
+    if (fShaderCompiled != GL_TRUE) {
+      printf("Unable to compile fragment shader %d!\n", fragmentShader);
+      printShaderLog(fragmentShader);
+      success = false;
+    } else {
+      // Attach fragment shader to program
+      glAttachShader(gProgramID, fragmentShader);
+
+      // Link program
+      glLinkProgram(gProgramID);
+
+      // Check for errors
+      GLint programSuccess = GL_TRUE;
+      glGetProgramiv(gProgramID, GL_LINK_STATUS, &programSuccess);
+      if (programSuccess != GL_TRUE) {
+        printf("Error linking program %d!\n", gProgramID);
+        printProgramLog(gProgramID);
+        success = false;
+      } else {
+        // Get vertex attribute location
+        gVertexPos2DLocation = glGetAttribLocation(gProgramID, "LVertexPos2D");
+        if (gVertexPos2DLocation == -1) {
+          printf("LVertexPos2D is not a valid glsl program variable!\n");
+          success = false;
+        } else {
+          // Initialize clear color
+          glClearColor(0.f, 0.f, 0.f, 1.f);
+
+          // VBO data
+          GLfloat vertexData[] = {-1.0f, -1.0f, 1.0f,  -1.0f,
+                                  1.0f,  1.0f,  -1.0f, 1.0f};
+
+          // IBO data
+          GLuint indexData[] = {0, 1, 2, 3};
+
+          // Create VBO
+          glGenBuffers(1, &gVBO);
+          glBindBuffer(GL_ARRAY_BUFFER, gVBO);
+          glBufferData(GL_ARRAY_BUFFER, 2 * 4 * sizeof(GLfloat), vertexData,
+                       GL_STATIC_DRAW);
+
+          // Create IBO
+          glGenBuffers(1, &gIBO);
+          glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gIBO);
+          glBufferData(GL_ELEMENT_ARRAY_BUFFER, 4 * sizeof(GLuint), indexData,
+                       GL_STATIC_DRAW);
+        }
+      }
+    }
+  }
+
+  return success;
+}
+
+bool init() {
+  // Initialization flag
+  bool success = true;
+
+  // Initialize SDL
+  if (SDL_Init(SDL_INIT_VIDEO) < 0) {
+    printf("SDL could not initialize! SDL Error: %s\n", SDL_GetError());
+    success = false;
+  } else {
+    // Use OpenGL 3.1 core
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK,
+                        SDL_GL_CONTEXT_PROFILE_CORE);
+
+    // Create window
+    gWindow = SDL_CreateWindow(
+        "SDL Example", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
+        SCREEN_WIDTH, SCREEN_HEIGHT, SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN);
+    if (gWindow == NULL) {
+      printf("Window could not be created! SDL Error: %s\n", SDL_GetError());
+      success = false;
+    } else {
+      // Create context
+      gContext = SDL_GL_CreateContext(gWindow);
+      if (gContext == NULL) {
+        printf("OpenGL context could not be created! SDL Error: %s\n",
+               SDL_GetError());
+        success = false;
+      } else {
+        // Initialize GLEW
+        glewExperimental = GL_TRUE;
+        GLenum glewError = glewInit();
+        if (glewError != GLEW_OK) {
+          printf("Error initializing GLEW! %s\n",
+                 glewGetErrorString(glewError));
+        }
+
+        // Use Vsync
+        if (SDL_GL_SetSwapInterval(1) < 0) {
+          printf("Warning: Unable to set VSync! SDL Error: %s\n",
+                 SDL_GetError());
+        }
+
+        // Initialize OpenGL
+        if (!initGL()) {
+          printf("Unable to initialize OpenGL!\n");
+          success = false;
+        }
+      }
+    }
+  }
+
+  return success;
+}
+
+float iTime = 0.0;
+
+void render() {
+  // Clear color buffer
+  glClear(GL_COLOR_BUFFER_BIT);
+  iTime += 1.0 / 60.0;
+  // Render quad
+  if (gRenderQuad) {
+    // Bind program
+    glUseProgram(gProgramID);
+
+    int viewPortLocation = glGetUniformLocation(gProgramID, "viewPortSize");
+    int iTimeLocation = glGetUniformLocation(gProgramID, "iTime");
+    glUniform1f(iTimeLocation, iTime);
+    glUniform2f(viewPortLocation, SCREEN_WIDTH, SCREEN_HEIGHT);
+
+    // Enable vertex position
+    glEnableVertexAttribArray(gVertexPos2DLocation);
+
+    // Set vertex data
+    glBindBuffer(GL_ARRAY_BUFFER, gVBO);
+    glVertexAttribPointer(gVertexPos2DLocation, 2, GL_FLOAT, GL_FALSE,
+                          2 * sizeof(GLfloat), NULL);
+
+    // Set index data and render
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gIBO);
+    glDrawElements(GL_TRIANGLE_FAN, 4, GL_UNSIGNED_INT, NULL);
+
+    // Disable vertex position
+    glDisableVertexAttribArray(gVertexPos2DLocation);
+
+    // Unbind program
+    glUseProgram(NULL);
+  }
+}
+
+void close() {
+  // Deallocate program
+  glDeleteProgram(gProgramID);
+
+  // Destroy window
+  SDL_DestroyWindow(gWindow);
+  gWindow = NULL;
+
+  // Quit SDL subsystems
+  SDL_Quit();
+}
+
+int main(int argc, char *args[]) {
+  // Start up SDL and create window
+  if (!init()) {
+    printf("Failed to initialize!\n");
+  } else {
+    // Main loop flag
+    bool quit = false;
+
+    // Event handler
+    SDL_Event e;
+
+    // Enable text input
+    SDL_StartTextInput();
+
+    // While application is running
+    while (!quit) {
+      // Handle events on queue
+      while (SDL_PollEvent(&e) != 0) {
+        // User requests quit
+        if (e.type == SDL_QUIT) {
+          quit = true;
+        }
+      }
+
+      // Render quad
+      render();
+
+      // Update screen
+      SDL_GL_SwapWindow(gWindow);
+    }
+
+    // Disable text input
+    SDL_StopTextInput();
+  }
+
+  // Free resources and close SDL
+  close();
+
+  return 0;
 }
